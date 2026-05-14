@@ -1,0 +1,232 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Playfair+Display:ital,wght@0,900;1,900&display=swap');
+@import "tailwindcss";
+
+:root {
+  --bg-color: #fdfbf7;
+  --text-color: #2d2a26;
+  --card-bg: #ffffff;
+  --accent-color: #1a4d2e; /* Forest Green */
+  --accent-color-2: #d4a373; /* Warm Gold */
+  --btn-bg: #1a4d2e;
+  --btn-text: #fdfbf7;
+  --ui-radius: 12px;
+  --font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --display-font: 'Libre Baskerville', serif;
+  --heading-font: 'Playfair Display', serif;
+  --divider-color: rgba(45, 42, 38, 0.08);
+
+  --card-border: 1px solid var(--divider-color);
+  --card-shadow: 0 10px 30px -10px rgba(26, 77, 46, 0.1);
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  font-family: var(--font-family);
+  margin: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+.ghibli-heading {
+  font-family: var(--heading-font);
+  font-style: italic;
+}
+
+.ghibli-card {
+  background-color: var(--card-bg);
+  border-radius: var(--ui-radius);
+  border: var(--card-border);
+  box-shadow: var(--card-shadow);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.ghibli-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 35px -10px rgba(26, 77, 46, 0.15);
+}
+
+.yt-sidebar {
+  border-right: 1px solid var(--divider-color);
+  background-color: var(--bg-color);
+}
+
+.yt-header {
+  border-bottom: 1px solid var(--divider-color);
+  background-color: rgba(253, 251, 247, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.custom-input {
+  background-color: #fff;
+  border: 1px solid var(--divider-color);
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  transition: all 0.3s ease;
+}
+
+.custom-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(26, 77, 46, 0.1);
+}
+
+.custom-btn {
+  background-color: var(--btn-bg);
+  color: var(--btn-text);
+  border-radius: 9999px;
+  padding: 0.5rem 1.25rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.custom-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.custom-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.bg-overlay {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  z-index: 1;
+  transition: opacity 2s ease, filter 2s ease;
+}
+
+.bg-backdrop {
+  position: absolute;
+  inset: 0;
+  background-color: var(--bg-color);
+  opacity: 0.6;
+  z-index: 2;
+  transition: background-color 2s ease, opacity 1.5s ease;
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+}
+
+.motion-flicker {
+  animation: motion-flicker 4.5s steps(1, end) infinite;
+}
+@keyframes motion-flicker {
+  0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% { opacity: 1; }
+  20%, 24%, 55% { opacity: 0.85; }
+  22% { opacity: 0.7; }
+}
+
+.motion-drift .ghibli-card {
+  animation: motion-drift 9s ease-in-out infinite;
+}
+@keyframes motion-drift {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.motion-scanlines::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.02), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.02));
+  background-size: 100% 4px, 3px 100%;
+  pointer-events: none;
+  z-index: 100;
+}
+
+.motion-rain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url('https://www.transparenttextures.com/patterns/60-lines.png');
+  opacity: 0.1;
+  animation: motion-rain 0.3s linear infinite;
+  pointer-events: none;
+  z-index: 10;
+}
+@keyframes motion-rain {
+  from { background-position: 0 0; }
+  to { background-position: 40px 100px; }
+}
+
+.motion-ember::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 100, 0, 0.05), transparent);
+  animation: motion-ember 4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 10;
+}
+@keyframes motion-ember {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.1); }
+}
+
+.motion-dust::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url('https://www.transparenttextures.com/patterns/stardust.png');
+  opacity: 0.05;
+  animation: motion-dust 20s linear infinite;
+  pointer-events: none;
+  z-index: 10;
+}
+@keyframes motion-dust {
+  from { background-position: 0 0; }
+  to { background-position: 100% 100%; }
+}
+
+.custom-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.image-player {
+  aspect-ratio: 16/9;
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: #000;
+}
+
+.thumbnail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+.thumbnail-item {
+  cursor: pointer;
+}
+
+.thumbnail-image {
+  aspect-ratio: 16/9;
+  width: 100%;
+  border-radius: 12px;
+  object-fit: cover;
+  background-color: #eee;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--divider-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(45, 42, 38, 0.2);
+}
