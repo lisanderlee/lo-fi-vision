@@ -124,7 +124,7 @@ export default function App() {
   }, [history]);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isLogOpen, setIsLogOpen] = useState(true);
+  const [isLogOpen, setIsLogOpen] = useState(false);
   const [multiverseState, setMultiverseState] = useState<MultiverseState>(DEFAULT_STATE);
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -319,8 +319,7 @@ export default function App() {
     if (!prompt.trim() || isGenerating) return;
 
     setIsGenerating(true);
-    setIsLogOpen(true);
-    
+
     // 1. Trigger Multiverse Orchestration (async, background)
     const redesignPromise = orchestrateMultiverse(prompt, multiverseState).then(newState => {
       if (newState) setMultiverseState(newState);
