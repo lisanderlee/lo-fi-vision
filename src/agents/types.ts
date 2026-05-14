@@ -12,6 +12,20 @@ export interface LogEntry {
   result?: any;
 }
 
+/** Optional structured palette from the model; merged into cssVariables during orchestration. */
+export interface ThemePaletteHex {
+  bg?: string;
+  text?: string;
+  cardBg?: string;
+  accent?: string;
+  accent2?: string;
+  btnBg?: string;
+  btnText?: string;
+  uiRadius?: string;
+  cardShadow?: string;
+  dividerColor?: string;
+}
+
 export interface MultiverseState {
   cssVariables: string;
   motionPreset: 'none' | 'scanlines' | 'flicker' | 'drift' | 'rain' | 'ember' | 'dust';

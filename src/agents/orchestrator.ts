@@ -2,6 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 import { logger } from "./logger";
 import { MultiverseState } from "./types";
 import { generateNewMusic } from "./music";
+import { processMultiverseThemeCss } from "./themeContrast";
 
 export async function orchestrateMultiverse(prompt: string, currentState: MultiverseState): Promise<MultiverseState> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -11,35 +12,72 @@ export async function orchestrateMultiverse(prompt: string, currentState: Multiv
   const logId = logger.log("Orchestrator", "Analyzing multiverse shift...", prompt);
   
   try {
-    const stateForPrompt = { ...currentState };
+    const stateForPrompt: Partial<MultiverseState> = { ...currentState };
     delete (stateForPrompt as any).backgroundImage;
     delete (stateForPrompt as any).audioUrl;
+    delete (stateForPrompt as any).cssVariables;
 
     const systemPrompt = `
-      You are the Lyria Multiverse Orchestrator. 
-      Your job is to translate a user's aesthetic prompt into a complete UI redesign for "Ghibli Vision", a YouTube-style app.
-      
-      You must return a JSON object with:
-      - cssVariables: A string of CSS variables to inject into :root. Focus on:
-        --bg-color: main background
-        --text-color: main text
-        --accent-color: primary buttons and icons
-        --accent-color-2: secondary highlights
-        --card-bg: container backgrounds
-        --ui-radius: e.g. "8px" or "24px"
-        --card-shadow: e.g. "0 4px 12px rgba(0,0,0,0.1)"
-      - motionPreset: one of ["none", "scanlines", "flicker", "drift", "rain", "ember", "dust"]
-      - tone: A poetic description of the current reality's mood.
-      - musicStyle: Description of the "generated" soundtrack (e.g. "Lo-fi Ghibli beats with heavy rain").
-      - backgroundPrompt: A detailed image generation prompt for a wide (16:9) background artwork that matches the vibe.
-      - contrastCheck: One of ["light", "dark"] indicating the brightness of the generated background so the UI can adjust.
+You are a senior product UI designer and color-systems expert (Lyria Multiverse Orchestrator).
+Translate the user's aesthetic into a complete **content-area** theme for "Lo-Fi Vision" (YouTube-like layout). Do not try to theme the global top bar or side intelligence panel—only the tokens below affect sidebar + main content.
 
-      Multiverse Rules:
-      1. Contrast Intelligence: If the background is dark/busy, ensure --text-color is light and containers are semi-transparent.
-      2. Ghibli Essence: Every redesign must feel like a specific Ghibli world (Laputa, Totoro, Mononoke, Howl).
+You are **not** given the previous CSS variable string—each shift must produce a **fresh** palette and typography pairing from the user prompt and contrastCheck (do not assume fonts or colors stayed the same as last time).
 
-      Current State (Abstract): ${JSON.stringify(stateForPrompt)}
-      User Prompt: "${prompt}"
+Return a single JSON object with:
+- cssVariables: A string of semicolon-terminated CSS custom properties for :root. MUST include every key below with valid values:
+  --bg-color, --text-color, --card-bg, --accent-color, --accent-color-2, --btn-bg, --btn-text,
+  --ui-radius (e.g. "12px"), --card-shadow (full box-shadow), --divider-color (rgba or hex for hairlines),
+  --font-family, --display-font, --heading-font (see Typography section; use EXACT stack strings).
+- theme (optional but recommended): an object with the same colors as hex/strings for repair:
+  { "bg", "text", "cardBg", "accent", "accent2", "btnBg", "btnText", "uiRadius", "cardShadow", "dividerColor" }
+  Keys map to the CSS names above. Hex must include #.
+
+Typography (required — pick ONE full line for each variable; copy exactly, quotes included):
+
+--font-family (UI / body):
+  * 'Inter', ui-sans-serif, system-ui, sans-serif
+  * 'DM Sans', ui-sans-serif, system-ui, sans-serif
+  * 'Nunito', ui-sans-serif, system-ui, sans-serif
+  * 'Manrope', ui-sans-serif, system-ui, sans-serif
+  * 'Source Sans 3', ui-sans-serif, system-ui, sans-serif
+
+--heading-font (titles, .ghibli-heading — choose a mood fit; pair with UI font):
+  * 'Playfair Display', serif
+  * 'Libre Baskerville', serif
+  * 'Fraunces', serif
+  * 'Cormorant Garamond', serif
+  * 'Spectral', serif
+  * 'Lora', serif
+  * 'Crimson Pro', serif
+
+--display-font (secondary / poetic labels — often a refined serif; may match heading-font):
+  * 'Libre Baskerville', serif
+  * 'Cormorant Garamond', serif
+  * 'Spectral', serif
+  * 'Lora', serif
+  * (or same stack as --heading-font when appropriate)
+
+Never invent font names outside this list. Prefer pairings that match the Ghibli-world mood.
+
+Also include:
+- motionPreset: one of ["none", "scanlines", "flicker", "drift", "rain", "ember", "dust"]
+- tone: short poetic mood line
+- musicStyle: soundtrack description for Lyria
+- backgroundPrompt: detailed 16:9 Ghibli background art prompt
+- contrastCheck: "light" or "dark" — expected brightness of that background art
+
+Designer rules (non-negotiable):
+1. contrastCheck === "light" → --text-color must read clearly on warm OR cool tinted backgrounds — use muted ink, deep plum-teal, forest, burnt umber, or blue-gray as fits the scene (not only brown). --card-bg should read as a distinct surface vs --bg-color.
+2. contrastCheck === "dark" → --text-color can be moonlit ivory, pale sage, soft peach, or misty blue-white; --card-bg solid or high-opacity surfaces (#151822, #1a2332, rgba) so text never floats on glass alone.
+3. Body text must stay readable (~4.5:1 vs --bg-color and vs --card-bg after any automation). Never put --text-color and --bg-color both at ~white or both at ~black.
+4. --btn-text vs --btn-bg must be a bold, readable button pair.
+5. **Color creativity:** vary hue families across worlds — twilight indigo + copper, dawn coral + slate, moss + ochre, sakura pink + charcoal, storm teal + sand, etc. Accents (--accent-color, --accent-color-2) should feel clearly different from each other and from the background.
+6. Ghibli essence is mood and hand-crafted warmth, not "always beige + forest green" — borrow palette variety from Spirited Away markets, Mononoke forests, Ponyo seas, Howl's skies, etc.
+
+Before returning JSON, mentally verify: text on bg OK, text on card OK, button pair OK, accents distinct.
+
+Current State (abstract): ${JSON.stringify(stateForPrompt)}
+User Prompt: "${prompt}"
     `;
 
     const response = await ai.models.generateContent({
@@ -61,6 +99,13 @@ export async function orchestrateMultiverse(prompt: string, currentState: Multiv
     if (!jsonMatch) throw new Error("No JSON found in response: " + text);
     
     let newState = JSON.parse(jsonMatch[0]);
+
+    const repairedCss = processMultiverseThemeCss({
+      cssVariables: typeof newState.cssVariables === "string" ? newState.cssVariables : "",
+      theme: newState.theme,
+    });
+    newState.cssVariables = repairedCss;
+    delete newState.theme;
 
     // Handle Background Generation
     if (newState.backgroundPrompt) {
@@ -103,3 +148,4 @@ export async function orchestrateMultiverse(prompt: string, currentState: Multiv
     throw err;
   }
 }
+

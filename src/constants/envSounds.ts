@@ -1,13 +1,23 @@
-export type EnvironmentSoundId = 'rain' | 'forest' | 'fireplace' | 'waves' | 'cafe';
+/**
+ * Ambient MP3s in `public/Mp3/` (served at `/Mp3/…` by Vite in dev and copied to `dist` on build).
+ * File names must match on disk exactly (case-sensitive on Linux servers).
+ */
+export const ENVIRONMENT_SOUNDS = [
+  {
+    id: "rain",
+    label: "Rain",
+    src: "/Mp3/Rain.mp3",
+  },
+  {
+    id: "forest",
+    label: "Forest",
+    src: "/Mp3/Forrest.mp3",
+  },
+  {
+    id: "fireplace",
+    label: "Fireplace",
+    src: "/Mp3/Fireplace.mp3",
+  },
+] as const;
 
-export interface EnvironmentSound {
-  id: EnvironmentSoundId;
-  label: string;
-  src: string;
-}
-
-export const ENVIRONMENT_SOUNDS: EnvironmentSound[] = [
-  { id: 'rain', label: 'Rain', src: 'https://assets.mixkit.co/sfx/preview/mixkit-light-rain-loop-2393.mp3' },
-  { id: 'forest', label: 'Forest', src: 'https://assets.mixkit.co/sfx/preview/mixkit-forest-birds-ambience-1210.mp3' },
-  { id: 'fireplace', label: 'Fireplace', src: 'https://assets.mixkit.co/sfx/preview/mixkit-cracking-fireplace-754.mp3' },
-];
+export type EnvironmentSoundId = (typeof ENVIRONMENT_SOUNDS)[number]["id"];
