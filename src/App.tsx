@@ -21,6 +21,7 @@ import { logger } from './agents/logger';
 import { orchestrateMultiverse, retryAgent } from './agents/orchestrator';
 import { AgentActivityRail } from './components/AgentActivityRail';
 import { AgentLog } from './components/AgentLog';
+import { BreathingGuide } from './components/BreathingGuide';
 import { ImageMusicPlayer } from './components/ImageMusicPlayer';
 import { EnvironmentSoundPicker } from './components/EnvironmentSoundPicker';
 import { ENVIRONMENT_SOUNDS, type EnvironmentSoundId } from './constants/envSounds';
@@ -124,6 +125,7 @@ export default function App() {
   const [selectedEnvId, setSelectedEnvId] = useState<EnvironmentSoundId | null>(null);
   const [masterVolume, setMasterVolume] = useState(0.75);
   const [mixRatio, setMixRatio] = useState(0.5);
+  const [breathAudioDuck, setBreathAudioDuck] = useState(false);
   const previousBlobUrlRef = useRef<string | undefined>(undefined);
   const lastPromptRef = useRef<string>('');
 
@@ -159,9 +161,10 @@ export default function App() {
     const env  = envAudioRef.current;
     const envLevel   = masterVolume * Math.cos(mixRatio * Math.PI / 2);
     const musicLevel = masterVolume * Math.sin(mixRatio * Math.PI / 2);
-    if (main) main.volume = Math.min(1, Math.max(0, musicLevel));
-    if (env)  env.volume  = Math.min(1, Math.max(0, envLevel));
-  }, [masterVolume, mixRatio]);
+    const duck = breathAudioDuck ? 0.62 : 1;
+    if (main) main.volume = Math.min(1, Math.max(0, musicLevel * duck));
+    if (env)  env.volume  = Math.min(1, Math.max(0, envLevel * duck));
+  }, [masterVolume, mixRatio, breathAudioDuck]);
 
   const syncTransportPlaying = useCallback(() => {
     applyAudioMix();
@@ -628,6 +631,7 @@ export default function App() {
             <AgentLog logs={logs} isOpen={isLogOpen} />
           </div>
           <AgentActivityRail logs={logs} onRetry={handleRetryAgent} since={generationEpoch} />
+          <BreathingGuide onDuckingActiveChange={setBreathAudioDuck} />
         </div>
       </div>
     </motion.div>
