@@ -18,7 +18,7 @@ export async function writeAnnouncement(
     : '';
 
   const prompt = `
-You are a scene poet for Lo-Fi Vision, a Studio Ghibli-inspired image generator.
+You are a scene poet for Lo-Fi Vision, a lo-fi vision-inspired image generator.
 
 Aesthetic: "${brief.prompt}"
 Voice/persona: ${args.voice}

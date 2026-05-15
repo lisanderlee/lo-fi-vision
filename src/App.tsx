@@ -14,7 +14,7 @@ import {
   Trash2,
   Terminal,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useReducedMotion } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 import { LogEntry, MultiverseState } from './agents/types';
 import { logger } from './agents/logger';
@@ -64,7 +64,7 @@ interface GeneratedImage {
   timestamp: number;
 }
 
-const GHIBLI_STYLE_SUFFIX = ", Studio Ghibli style, hand-drawn aesthetic, soft watercolor textures, whimsical atmosphere, high detail, masterpiece, Hayao Miyazaki inspiration";
+const GHIBLI_STYLE_SUFFIX = ", lo-fi vision style, hand-drawn aesthetic, soft watercolor textures, whimsical atmosphere, high detail, masterpiece, Hayao Miyazaki inspiration";
 
 const INITIAL_IMAGES: GeneratedImage[] = [
   {
@@ -96,6 +96,69 @@ const YT = {
   btnDark: '#0f0f0f',
 } as const;
 
+/** Hero 16:9 image: crossfade + optional Ken Burns; respects reduced motion. */
+function HeroPlayerImageLayer({
+  img,
+  prefersReducedMotion,
+}: {
+  img: GeneratedImage;
+  prefersReducedMotion: boolean;
+}) {
+  const ease = [0.22, 1, 0.36, 1] as const;
+  const transitionDuration = prefersReducedMotion ? 0.2 : 0.62;
+  const transition = {
+    opacity: { duration: transitionDuration, ease },
+    ...(prefersReducedMotion
+      ? {}
+      : {
+          scale: { duration: transitionDuration, ease },
+          filter: { duration: Math.min(0.58, transitionDuration), ease },
+        }),
+  };
+
+  const initial = prefersReducedMotion
+    ? { opacity: 0 }
+    : { opacity: 0, scale: 1.07, filter: 'blur(14px)' };
+
+  const animate = prefersReducedMotion
+    ? { opacity: 1 }
+    : { opacity: 1, scale: 1, filter: 'blur(0px)' };
+
+  const exit = prefersReducedMotion
+    ? { opacity: 0 }
+    : { opacity: 0, scale: 0.94, filter: 'blur(8px)' };
+
+  return (
+    <motion.div
+      className="absolute inset-0 overflow-hidden z-[1]"
+      initial={initial}
+      animate={animate}
+      exit={exit}
+      transition={transition}
+    >
+      {prefersReducedMotion ? (
+        <div className="absolute inset-0">
+          <img
+            src={img.url}
+            alt={img.prompt}
+            className="absolute inset-0 h-full w-full object-cover pointer-events-none select-none"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      ) : (
+        <div className="hero-ken-burns absolute inset-[-8%] h-[116%] w-[116%]">
+          <img
+            src={img.url}
+            alt={img.prompt}
+            className="absolute inset-0 h-full w-full object-cover pointer-events-none select-none"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      )}
+    </motion.div>
+  );
+}
+
 const DEFAULT_STATE: MultiverseState = {
   cssVariables: `--bg-color: #fdfbf7; --text-color: #2d2a26; --card-bg: #ffffff; --accent-color: #1a4d2e; --accent-color-2: #d4a373; --btn-bg: #1a4d2e; --btn-text: #fdfbf7; --ui-radius: 12px; --card-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.12); --divider-color: rgba(15, 15, 15, 0.08); --font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; --display-font: 'Libre Baskerville', serif; --heading-font: 'Playfair Display', serif;`,
   motionPreset: 'none',
@@ -126,6 +189,7 @@ export default function App() {
   const [masterVolume, setMasterVolume] = useState(0.75);
   const [mixRatio, setMixRatio] = useState(0.5);
   const [breathAudioDuck, setBreathAudioDuck] = useState(false);
+  const prefersReducedMotion = useReducedMotion() === true;
   const previousBlobUrlRef = useRef<string | undefined>(undefined);
   const lastPromptRef = useRef<string>('');
 
@@ -197,9 +261,7 @@ export default function App() {
       const track = ENVIRONMENT_SOUNDS.find((t) => t.id === next);
       if (!track) return;
       env.loop = true; env.src = track.src; env.load();
-      if (Boolean(audioRef.current && !audioRef.current.paused) || !env.paused) {
-        void playMediaElementWhenReady(env).catch(() => syncTransportPlaying());
-      }
+      void playMediaElementWhenReady(env).catch(() => syncTransportPlaying());
       syncTransportPlaying();
     },
     [selectedEnvId, syncTransportPlaying]
@@ -497,18 +559,13 @@ export default function App() {
           <div className="max-w-screen-2xl mx-auto flex flex-col lg:flex-row gap-6 lg:gap-10">
             <div className="flex-1 min-w-0">
               <div className="ghibli-card overflow-hidden shadow-2xl mb-6 bg-white border border-black/5 rounded-[var(--ui-radius)]">
-                <div className="bg-black aspect-video relative">
-                  <AnimatePresence mode="wait">
+                <div className="bg-black aspect-video relative overflow-hidden">
+                  <AnimatePresence initial={false} mode="sync">
                     {currentImage && !isGenerating && (
-                      <motion.img
+                      <HeroPlayerImageLayer
                         key={currentImage.id}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        src={currentImage.url}
-                        alt={currentImage.prompt}
-                        className="w-full h-full object-cover pointer-events-none select-none"
-                        referrerPolicy="no-referrer"
+                        img={currentImage}
+                        prefersReducedMotion={prefersReducedMotion}
                       />
                     )}
                   </AnimatePresence>

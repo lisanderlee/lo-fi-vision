@@ -1,83 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Loader2, Check, X, Minus, RotateCcw,
-  Clapperboard, Palette, Frame, Music2, Feather, Glasses, Cpu,
+  Loader2, Check, X, Minus, RotateCcw, CircleHelp,
 } from 'lucide-react';
 import type { LogEntry, AgentStatus } from '../agents/types';
-
-const ROSTER: {
-  id: string;
-  agent: string;
-  title: string;
-  subtitle: string;
-  Icon: typeof Loader2;
-  accent: string;
-  retryable: boolean;
-}[] = [
-  {
-    id: 'director',
-    agent: 'Director',
-    title: 'Director',
-    subtitle: 'Running the whole show',
-    Icon: Clapperboard,
-    accent: '#7c3aed',
-    retryable: true,
-  },
-  {
-    id: 'themedesigner',
-    agent: 'ThemeDesigner',
-    title: 'Theme',
-    subtitle: 'Vibes & palettes',
-    Icon: Palette,
-    accent: '#db2777',
-    retryable: true,
-  },
-  {
-    id: 'artdirector',
-    agent: 'ArtDirector',
-    title: 'Art Director',
-    subtitle: 'Painting the backdrop',
-    Icon: Frame,
-    accent: '#ea580c',
-    retryable: true,
-  },
-  {
-    id: 'composer',
-    agent: 'Composer',
-    title: 'Composer',
-    subtitle: 'Writing the score',
-    Icon: Music2,
-    accent: '#059669',
-    retryable: true,
-  },
-  {
-    id: 'scenepoet',
-    agent: 'ScenePoet',
-    title: 'Scene Poet',
-    subtitle: 'Finding the words',
-    Icon: Feather,
-    accent: '#0284c7',
-    retryable: true,
-  },
-  {
-    id: 'critic',
-    agent: 'Critic',
-    title: 'Critic',
-    subtitle: 'Keeping it tight',
-    Icon: Glasses,
-    accent: '#d97706',
-    retryable: false,
-  },
-  {
-    id: 'system',
-    agent: 'System',
-    title: 'System',
-    subtitle: 'Holding it together',
-    Icon: Cpu,
-    accent: '#64748b',
-    retryable: false,
-  },
-];
+import { AGENT_ROSTER } from '../constants/agentRoster';
 
 function latestLogForAgent(logs: LogEntry[], agent: string): LogEntry | undefined {
   let best: LogEntry | undefined;
@@ -120,6 +47,21 @@ export interface AgentActivityRailProps {
 }
 
 export function AgentActivityRail({ logs, onRetry, since = 0 }: AgentActivityRailProps) {
+  const [openAboutId, setOpenAboutId] = useState<string | null>(null);
+  /** Ignore backdrop dismiss right after open (avoids iOS synthetic click hitting the overlay). */
+  const suppressBackdropCloseUntilRef = useRef(0);
+
+  const closeAbout = useCallback(() => setOpenAboutId(null), []);
+
+  useEffect(() => {
+    if (!openAboutId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAbout();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [openAboutId, closeAbout]);
+
   const currentLogs = useMemo(
     () => since > 0 ? logs.filter((l) => l.timestamp >= since) : logs,
     [logs, since],
@@ -131,12 +73,70 @@ export function AgentActivityRail({ logs, onRetry, since = 0 }: AgentActivityRai
   );
 
   const rosterState = useMemo(() => {
-    return ROSTER.map((def) => {
+    return AGENT_ROSTER.map((def) => {
       const entry = latestLogForAgent(currentLogs, def.agent);
       const status: AgentStatus | 'pending' = entry?.status ?? 'pending';
       return { def, entry, status };
     });
   }, [currentLogs]);
+
+  const openDef = openAboutId ? AGENT_ROSTER.find((d) => d.id === openAboutId) : undefined;
+
+  const aboutPortal =
+    openAboutId &&
+    openDef &&
+    typeof document !== 'undefined' &&
+    createPortal(
+      <>
+        {/* pointerdown (not click) avoids open-then-close when the same click would hit the overlay after commit */}
+        <div
+          className="fixed inset-0 z-[100]"
+          style={{ zIndex: 10000, backgroundColor: 'rgba(15, 15, 15, 0.35)' }}
+          aria-hidden
+          onPointerDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (typeof performance !== 'undefined' &&
+                performance.now() < suppressBackdropCloseUntilRef.current) {
+              return;
+            }
+            closeAbout();
+          }}
+        />
+        <div
+          id="agent-about-panel"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="agent-about-panel-title"
+          className="fixed z-[110] rounded-[var(--ui-radius)] border overflow-y-auto text-left [font-family:var(--font-family)] w-[min(92vw,32rem)] max-h-[min(78vh,36rem)] p-6 sm:p-8 box-border"
+          style={{
+            zIndex: 10001,
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            borderColor: 'var(--divider-color)',
+            backgroundColor: 'var(--card-bg)',
+            color: 'var(--text-color)',
+            boxShadow: '0 24px 64px -16px rgba(0,0,0,0.45)',
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+            <p
+              id="agent-about-panel-title"
+              className="text-lg sm:text-xl font-bold leading-tight"
+              style={{ color: 'var(--text-color)' }}
+            >
+              {openDef.title}
+            </p>
+            <p
+              className="text-sm sm:text-[15px] mt-4 leading-relaxed opacity-92"
+              style={{ color: 'var(--text-color)' }}
+            >
+              {openDef.about}
+            </p>
+        </div>
+      </>,
+      document.body,
+    );
 
   return (
     <div
@@ -146,6 +146,7 @@ export function AgentActivityRail({ logs, onRetry, since = 0 }: AgentActivityRai
         backgroundColor: 'color-mix(in srgb, var(--card-bg) 92%, transparent)',
       }}
     >
+      {aboutPortal}
       <div className="px-3 sm:px-4 pt-2.5 pb-1">
         <div className="flex items-center justify-between gap-3 mb-2">
           <div className="flex items-center gap-2 min-w-0">
@@ -226,12 +227,40 @@ export function AgentActivityRail({ logs, onRetry, since = 0 }: AgentActivityRai
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-1">
-                      <p
-                        className="text-xs font-bold leading-tight truncate"
-                        style={{ color: 'var(--text-color)' }}
-                      >
-                        {def.title}
-                      </p>
+                      <div className="flex items-center gap-0.5 min-w-0 flex-1">
+                        <p
+                          className="text-xs font-bold leading-tight truncate"
+                          style={{ color: 'var(--text-color)' }}
+                        >
+                          {def.title}
+                        </p>
+                        <button
+                          type="button"
+                          id={`agent-about-trigger-${def.id}`}
+                          aria-label={`What ${def.title} does`}
+                          aria-expanded={openAboutId === def.id}
+                          aria-controls="agent-about-panel"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            queueMicrotask(() => {
+                              setOpenAboutId((prev) => {
+                                if (prev === def.id) return null;
+                                if (typeof performance !== 'undefined') {
+                                  suppressBackdropCloseUntilRef.current = performance.now() + 320;
+                                }
+                                return def.id;
+                              });
+                            });
+                          }}
+                          className="shrink-0 rounded-full p-0.5 opacity-55 hover:opacity-100 transition-opacity focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1"
+                          style={{
+                            color: 'var(--text-color)',
+                            outlineColor: def.accent,
+                          }}
+                        >
+                          <CircleHelp className="w-3.5 h-3.5" strokeWidth={2} aria-hidden />
+                        </button>
+                      </div>
                       <span className="shrink-0 flex items-center" title={statusLabel(status)}>
                         <StatusBadge status={status} />
                       </span>

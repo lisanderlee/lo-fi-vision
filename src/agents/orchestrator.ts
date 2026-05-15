@@ -42,7 +42,7 @@ async function reviseOnce(
         } else if (tool === "generate_artwork") {
           next.artwork = await generateArtwork(brief, {
             scene: brief.prompt,
-            style: "Studio Ghibli watercolor",
+            style: "lo-fi vision watercolor",
             revisionNotes: notes,
           });
         } else if (tool === "compose_audio") {
@@ -94,7 +94,7 @@ export async function retryAgent(
     }
 
     case 'ArtDirector': {
-      const artwork = await generateArtwork(brief, { scene: prompt, style: 'Studio Ghibli watercolor' });
+      const artwork = await generateArtwork(brief, { scene: prompt, style: 'lo-fi vision watercolor' });
       return { backgroundImage: artwork.imageUrl };
     }
 
@@ -135,7 +135,7 @@ export async function orchestrateMultiverse(
 
     const results = await Promise.allSettled([
       withTimeout(LLM_TIMEOUT_MS,   designTheme(brief, { mood: prompt })),
-      withTimeout(IMAGE_TIMEOUT_MS, generateArtwork(brief, { scene: prompt, style: "Studio Ghibli watercolor" })),
+      withTimeout(IMAGE_TIMEOUT_MS, generateArtwork(brief, { scene: prompt, style: "lo-fi vision watercolor" })),
       withTimeout(LLM_TIMEOUT_MS,   composeAudio(brief, { mood: prompt })),
       withTimeout(LLM_TIMEOUT_MS,   writeAnnouncement(brief, { voice: "in-universe narrator", tone: prompt })),
     ]);
