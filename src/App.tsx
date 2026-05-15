@@ -8,6 +8,7 @@ import React, {
 import {
   Search,
   History,
+  Headphones,
   Sparkles,
   Loader2,
   Trash2,
@@ -17,21 +18,19 @@ import { motion, AnimatePresence } from 'motion/react';
 import { GoogleGenAI } from "@google/genai";
 import { LogEntry, MultiverseState } from './agents/types';
 import { logger } from './agents/logger';
-import { orchestrateMultiverse } from './agents/orchestrator';
-import { critiqueScene } from './agents/summary';
+import { orchestrateMultiverse, retryAgent } from './agents/orchestrator';
+import { AgentActivityRail } from './components/AgentActivityRail';
 import { AgentLog } from './components/AgentLog';
 import { ImageMusicPlayer } from './components/ImageMusicPlayer';
 import { EnvironmentSoundPicker } from './components/EnvironmentSoundPicker';
 import { ENVIRONMENT_SOUNDS, type EnvironmentSoundId } from './constants/envSounds';
-
-/**
- * When Lyria and ambience both play, ambience volume is scaled by this (0–1).
- * Set to 1 so the ambience slider is the only trim; balance against Lyria via {@link SCENE_MUSIC_VOLUME}.
- */
-const AMBIENCE_LAYER_WITH_SCENE = 1;
-
-/** Lyria / scene music output level (0–1). Kept conservative so ambience reads in the blend. */
-const SCENE_MUSIC_VOLUME = 0.52;
+import {
+  SkeletonHero,
+  SkeletonSidebarItem,
+  SkeletonGridItem,
+  SkeletonTitle,
+  SkeletonTone,
+} from './components/Skeleton';
 
 /**
  * Ensures an `<audio>` element can play after `src` / `load()` (blobs and network both need `canplay` sometimes).
@@ -105,40 +104,34 @@ const DEFAULT_STATE: MultiverseState = {
 };
 
 export default function App() {
+  const [hasStarted, setHasStarted] = useState(false);
   const [prompt, setPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [history, setHistory] = useState<GeneratedImage[]>(() => {
-    try {
-      const saved = typeof window !== 'undefined' ? localStorage.getItem('ghibli_history') : null;
-      return saved ? JSON.parse(saved) : INITIAL_IMAGES;
-    } catch (e) {
-      console.error('History parse error:', e);
-      return INITIAL_IMAGES;
-    }
-  });
+  const [isOrchestrating, setIsOrchestrating] = useState(false);
+  // History always starts empty each session — no stale entries from previous
+  // sessions are shown. localStorage is still written so the data is available
+  // if needed, but we never read it back into the visible history.
+  const [history, setHistory] = useState<GeneratedImage[]>([]);
   const [currentImage, setCurrentImage] = useState<GeneratedImage | null>(null);
-  useEffect(() => {
-    if (history.length > 0 && !currentImage) {
-      setCurrentImage(history[0]);
-    }
-  }, [history]);
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isLogOpen, setIsLogOpen] = useState(true);
+  const [isLogOpen, setIsLogOpen] = useState(false);
   const [multiverseState, setMultiverseState] = useState<MultiverseState>(DEFAULT_STATE);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [generationEpoch, setGenerationEpoch] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const envAudioRef = useRef<HTMLAudioElement>(null);
   const [selectedEnvId, setSelectedEnvId] = useState<EnvironmentSoundId | null>(null);
-  const [envVolume, setEnvVolume] = useState(0.95);
+  const [masterVolume, setMasterVolume] = useState(0.75);
+  const [mixRatio, setMixRatio] = useState(0.5);
   const previousBlobUrlRef = useRef<string | undefined>(undefined);
+  const lastPromptRef = useRef<string>('');
 
+  // Revoke previous blob URL when a new clip arrives
   useEffect(() => {
     const prev = previousBlobUrlRef.current;
     const next = multiverseState.audioUrl;
-    if (prev && prev.startsWith('blob:') && prev !== next) {
-      URL.revokeObjectURL(prev);
-    }
+    if (prev && prev.startsWith('blob:') && prev !== next) URL.revokeObjectURL(prev);
     previousBlobUrlRef.current = next;
   }, [multiverseState.audioUrl]);
 
@@ -146,45 +139,29 @@ export default function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    const saveToLocalStorage = (data: GeneratedImage[]) => {
-      try {
-        localStorage.setItem('ghibli_history', JSON.stringify(data));
-      } catch (e) {
-        console.error('History save error, attempting recovery:', e);
-        if (data.length > 1) {
-          // Try with one less item recursively
-          saveToLocalStorage(data.slice(0, -1));
-        } else if (data.length === 1) {
-          // If even one image is too big, try saving it without the image data (just prompt)
-          // or just clear it to keep the app from crashing
-          try {
-            const lowResHistory = data.map(img => ({ ...img, url: '' }));
-            localStorage.setItem('ghibli_history', JSON.stringify(lowResHistory));
-          } catch (innerE) {
-            localStorage.removeItem('ghibli_history');
-          }
-        }
-      }
-    };
-    
-    saveToLocalStorage(history);
+    // Base64 data URLs can be 2–5 MB each and blow the ~5 MB localStorage
+    // quota. Strip them before persisting — only keep external URLs (unsplash,
+    // https://…) which are tiny strings. Prompts + timestamps are preserved so
+    // history labels survive a reload even without the image thumbnail.
+    const serializable = history.map(img => ({
+      ...img,
+      url: img.url.startsWith('data:') ? '' : img.url,
+    }));
+    try {
+      localStorage.setItem('ghibli_history', JSON.stringify(serializable));
+    } catch {
+      localStorage.removeItem('ghibli_history');
+    }
   }, [history]);
 
   const applyAudioMix = useCallback(() => {
     const main = audioRef.current;
-    const env = envAudioRef.current;
-
-    if (main) main.volume = Math.min(1, Math.max(0, SCENE_MUSIC_VOLUME));
-
-    if (!env) return;
-
-    const url = multiverseState.audioUrl;
-    const mainPlaying = Boolean(main && url && !main.paused);
-    const envPlaying = Boolean(selectedEnvId && !env.paused);
-    const layer =
-      mainPlaying && envPlaying ? AMBIENCE_LAYER_WITH_SCENE : 1;
-    env.volume = Math.min(1, Math.max(0, envVolume * layer));
-  }, [envVolume, multiverseState.audioUrl, selectedEnvId]);
+    const env  = envAudioRef.current;
+    const envLevel   = masterVolume * Math.cos(mixRatio * Math.PI / 2);
+    const musicLevel = masterVolume * Math.sin(mixRatio * Math.PI / 2);
+    if (main) main.volume = Math.min(1, Math.max(0, musicLevel));
+    if (env)  env.volume  = Math.min(1, Math.max(0, envLevel));
+  }, [masterVolume, mixRatio]);
 
   const syncTransportPlaying = useCallback(() => {
     applyAudioMix();
@@ -196,11 +173,9 @@ export default function App() {
   const syncTransportPlayingRef = useRef(syncTransportPlaying);
   syncTransportPlayingRef.current = syncTransportPlaying;
 
-  useEffect(() => {
-    applyAudioMix();
-  }, [applyAudioMix]);
+  useEffect(() => { applyAudioMix(); }, [applyAudioMix]);
 
-  /** New Lyria blob replaces the main track only; ambience keeps playing when selected. */
+  // New clip arrives — pause old track so App re-plays on next user gesture
   useEffect(() => {
     audioRef.current?.pause();
     syncTransportPlayingRef.current();
@@ -210,27 +185,16 @@ export default function App() {
     (id: EnvironmentSoundId) => {
       const next = id === selectedEnvId ? null : id;
       setSelectedEnvId(next);
-
       const env = envAudioRef.current;
       if (!env) return;
-
       if (next === null) {
-        env.pause();
-        env.removeAttribute("src");
-        env.load();
-        syncTransportPlaying();
-        return;
+        env.pause(); env.removeAttribute("src"); env.load();
+        syncTransportPlaying(); return;
       }
-
       const track = ENVIRONMENT_SOUNDS.find((t) => t.id === next);
       if (!track) return;
-      env.loop = true;
-      env.src = track.src;
-      env.load();
-
-      const anyPlaying =
-        Boolean(audioRef.current && !audioRef.current.paused) || !env.paused;
-      if (anyPlaying) {
+      env.loop = true; env.src = track.src; env.load();
+      if (Boolean(audioRef.current && !audioRef.current.paused) || !env.paused) {
         void playMediaElementWhenReady(env).catch(() => syncTransportPlaying());
       }
       syncTransportPlaying();
@@ -240,55 +204,28 @@ export default function App() {
 
   const toggleAtmospherePlayback = useCallback(async () => {
     const main = audioRef.current;
-    const env = envAudioRef.current;
-    const url = multiverseState.audioUrl;
+    const env  = envAudioRef.current;
+    const url  = multiverseState.audioUrl;
 
-    const mainPlaying = main && !main.paused;
-    const envPlaying = env && !env.paused;
-
-    if (mainPlaying || envPlaying) {
-      main?.pause();
-      env?.pause();
-      syncTransportPlaying();
-      return;
+    if (main && !main.paused || env && !env.paused) {
+      main?.pause(); env?.pause(); syncTransportPlaying(); return;
     }
 
     if (!url && !selectedEnvId) return;
 
-    const envTrack = selectedEnvId
-      ? ENVIRONMENT_SOUNDS.find((t) => t.id === selectedEnvId)
-      : undefined;
+    const envTrack = selectedEnvId ? ENVIRONMENT_SOUNDS.find((t) => t.id === selectedEnvId) : undefined;
+    if (envTrack && env) { env.loop = true; env.src = envTrack.src; env.load(); }
 
-    if (envTrack && env) {
-      env.loop = true;
-      env.src = envTrack.src;
-      env.load();
-    }
-
-    const pMain =
-      url && main
-        ? playMediaElementWhenReady(main).catch((err) => {
-            logger.log(
-              'System',
-              'Scene music failed to play',
-              err instanceof Error ? err.message : String(err)
-            );
-          })
-        : Promise.resolve();
-
-    const pEnv =
-      envTrack && env
-        ? playMediaElementWhenReady(env).catch((err) => {
-            logger.log(
-              'System',
-              'Ambience failed to play',
-              err instanceof Error ? err.message : String(err)
-            );
-          })
-        : Promise.resolve();
+    const pMain = url && main
+      ? playMediaElementWhenReady(main).catch(err =>
+          logger.log('System', 'Scene music failed to play', err instanceof Error ? err.message : String(err)))
+      : Promise.resolve();
+    const pEnv = envTrack && env
+      ? playMediaElementWhenReady(env).catch(err =>
+          logger.log('System', 'Ambience failed to play', err instanceof Error ? err.message : String(err)))
+      : Promise.resolve();
 
     await Promise.all([pMain, pEnv]);
-
     syncTransportPlaying();
   }, [multiverseState.audioUrl, selectedEnvId, syncTransportPlaying]);
 
@@ -297,11 +234,18 @@ export default function App() {
     const sub = logger.subscribe(setLogs);
     
     const globalErrorHandler = (event: ErrorEvent) => {
-      logger.log("System", "Uncaught Error detected", event.message);
+      // ResizeObserver fires this benign browser warning when animation frames
+      // cause layout changes inside observer callbacks — safe to suppress.
+      if (event.message?.includes('ResizeObserver')) return;
+      const loc = event.filename ? ` (${event.filename.split('/').pop()}:${event.lineno})` : '';
+      logger.log("System", "Uncaught Error detected", `${event.message}${loc}`);
     };
-    
+
     const unhandledRejectionHandler = (event: PromiseRejectionEvent) => {
-      logger.log("System", "Unhandled Promise Rejection", String(event.reason));
+      const msg = String(event.reason);
+      // Browser-extension messaging noise — not our code.
+      if (msg.includes('message channel closed') || msg.includes('asynchronous response')) return;
+      logger.log("System", "Unhandled Promise Rejection", msg);
     };
 
     window.addEventListener('error', globalErrorHandler);
@@ -314,35 +258,68 @@ export default function App() {
     };
   }, []);
 
+  const handleRetryAgent = useCallback(async (agentName: string) => {
+    const p = lastPromptRef.current;
+    if (!p) return;
+    try {
+      const patch = await retryAgent(agentName, p, multiverseState);
+      if (patch) setMultiverseState(prev => ({ ...prev, ...patch }));
+    } catch (err) {
+      console.error(`Retry ${agentName} error:`, err);
+    }
+  }, [multiverseState]);
+
   const handleVisionShift = async (e: FormEvent) => {
     e.preventDefault();
     if (!prompt.trim() || isGenerating) return;
 
+    setHasStarted(true);
     setIsGenerating(true);
-    setIsLogOpen(true);
-    
-    // 1. Trigger Multiverse Orchestration (async, background)
-    const redesignPromise = orchestrateMultiverse(prompt, multiverseState).then(newState => {
-      if (newState) setMultiverseState(newState);
-    }).catch(err => {
-      console.error('Redesign error:', err);
-      logger.log("System", "Redesign Error", String(err));
-    });
+    lastPromptRef.current = prompt;
 
-    // 2. Main Image Generation
+    // Stamp the start of this generation. AgentActivityRail filters to entries
+    // created at or after this epoch, so stale entries from the previous run
+    // (e.g. Critic "done") don't bleed into the new generation's view.
+    setGenerationEpoch(Date.now());
+
+    // Pause both audio tracks and clear the old clip so the player shows as
+    // muted until the Composer returns a new loop for this generation.
+    audioRef.current?.pause();
+    envAudioRef.current?.pause();
+    setMultiverseState(prev => ({ ...prev, audioUrl: undefined }));
+    syncTransportPlaying();
+
+    // Fire orchestration in the background — it runs independently and
+    // applies the theme/backdrop/music when it settles. We do NOT await it
+    // here so the hero image spinner reflects only the image generation.
+    setIsOrchestrating(true);
+    orchestrateMultiverse(prompt, multiverseState)
+      .then(newState => {
+        if (newState) setMultiverseState(newState);
+      })
+      .catch(err => {
+        console.error('Orchestration error:', err);
+        logger.log("System", "Orchestration Error", String(err));
+      })
+      .finally(() => setIsOrchestrating(false));
+
+    // Hero image generation — spinner lives and dies with this request only
     const logId = logger.log("Artist Agent", "Painting your central masterpiece...", prompt);
-    
+
     try {
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) throw new Error('GEMINI_API_KEY is not defined in environment');
-      
+
       const ai = new GoogleGenAI({ apiKey });
       const fullPrompt = `${prompt}${GHIBLI_STYLE_SUFFIX}`;
-      
+
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
         contents: [{ parts: [{ text: fullPrompt }] }],
-        config: { imageConfig: { aspectRatio: "16:9" } },
+        config: {
+          responseModalities: ['TEXT', 'IMAGE'],
+          imageConfig: { aspectRatio: "16:9" },
+        },
       });
 
       let imageUrl = '';
@@ -363,13 +340,10 @@ export default function App() {
           prompt: prompt,
           timestamp: Date.now(),
         };
-        setHistory(prev => [newImage, ...prev].slice(0, 2));
+        setHistory(prev => [newImage, ...prev].slice(0, 6));
         setCurrentImage(newImage);
         setPrompt('');
         logger.update(logId, { status: "done" });
-        
-        // Trigger Critic Agent
-        critiqueScene(prompt, imageUrl);
       } else {
         throw new Error('No image data received');
       }
@@ -377,7 +351,8 @@ export default function App() {
       console.error('Generation error:', err);
       logger.update(logId, { status: "failed", detail: String(err) });
     } finally {
-      await redesignPromise; // Wait for the UI shift to complete before stopping loader if desired
+      // Hero image done (success or failure) — unlock the input immediately.
+      // Orchestration continues in the background and updates the theme when ready.
       setIsGenerating(false);
     }
   };
@@ -388,11 +363,27 @@ export default function App() {
     if (currentImage?.id === id) setCurrentImage(null);
   };
 
+  if (!hasStarted) {
+    return (
+      <LandingScreen
+        prompt={prompt}
+        onPromptChange={setPrompt}
+        onSubmit={handleVisionShift}
+        isGenerating={isGenerating}
+      />
+    );
+  }
+
   return (
-    <div className="flex flex-col h-screen overflow-hidden transition-all duration-1000 relative text-[#0f0f0f]">
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+      className="flex flex-col h-screen overflow-hidden transition-all duration-1000 relative text-[#0f0f0f]"
+    >
       <style dangerouslySetInnerHTML={{ __html: `:root { ${multiverseState.cssVariables} }` }} />
       
-      {/* Multiverse Background System */}
+      {/* Multiverse Background System — layers: image → backdrop → tint → vignette → grain */}
       <div className="fixed inset-0 z-0 pointer-events-none">
         <AnimatePresence>
           {multiverseState.backgroundImage && (
@@ -407,16 +398,17 @@ export default function App() {
             />
           )}
         </AnimatePresence>
-        <div className="bg-backdrop opacity-70" />
+        <div className="bg-backdrop" />
+        <div className="bg-tint" />
+        <div className="bg-vignette" />
+        <div className="bg-grain" />
       </div>
 
       <div className="flex flex-col h-full relative z-10">
-        {/* Hidden Audio for Atmosphere */}
+        {/* Scene music — 30s Lyria clip, loops */}
         <audio
           ref={audioRef}
-          loop
-          preload="auto"
-          playsInline
+          loop preload="auto" playsInline
           src={multiverseState.audioUrl}
           onPlay={syncTransportPlaying}
           onPause={syncTransportPlaying}
@@ -426,12 +418,10 @@ export default function App() {
             syncTransportPlaying();
           }}
         />
-
+        {/* Ambience layer */}
         <audio
           ref={envAudioRef}
-          loop
-          playsInline
-          preload="auto"
+          loop playsInline preload="auto"
           onPlay={syncTransportPlaying}
           onPause={syncTransportPlaying}
           onError={() => {
@@ -444,11 +434,8 @@ export default function App() {
         <header className="yt-header h-16 flex items-center justify-between px-4 z-30 shrink-0">
           <div className="flex items-center gap-4 text-[#0f0f0f]">
             <div className="flex items-center gap-1 cursor-pointer select-none">
-              <div
-                className="p-1 rounded-md shrink-0"
-                style={{ backgroundColor: YT.red }}
-              >
-                <Sparkles className="w-6 h-6 text-white" strokeWidth={2} />
+              <div className="flex items-center justify-center w-8 h-8 rounded-full bg-[#0f0f0f] shrink-0">
+                <Headphones className="w-4 h-4 text-white" strokeWidth={2} />
               </div>
               <span className="text-xl font-bold tracking-tight hidden sm:block" style={{ fontFamily: 'var(--font-family)' }}>
                 Lo-Fi Vision
@@ -499,8 +486,9 @@ export default function App() {
           </div>
         </header>
 
-        <div className="flex flex-1 min-h-0 overflow-hidden">
-          <div className="flex flex-1 min-w-0 min-h-0 overflow-hidden text-[var(--text-color)] [font-family:var(--font-family)]">
+        <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden flex-col">
+          <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
+            <div className="flex flex-1 min-w-0 min-h-0 overflow-hidden text-[var(--text-color)] [font-family:var(--font-family)]">
         {/* Main Content */}
         <main className={`flex-1 overflow-y-auto p-4 md:p-8 relative motion-layer ${multiverseState.motionPreset !== 'none' ? `motion-${multiverseState.motionPreset}` : ''}`}>
           <div className="max-w-screen-2xl mx-auto flex flex-col lg:flex-row gap-6 lg:gap-10">
@@ -508,7 +496,7 @@ export default function App() {
               <div className="ghibli-card overflow-hidden shadow-2xl mb-6 bg-white border border-black/5 rounded-[var(--ui-radius)]">
                 <div className="bg-black aspect-video relative">
                   <AnimatePresence mode="wait">
-                    {currentImage && (
+                    {currentImage && !isGenerating && (
                       <motion.img
                         key={currentImage.id}
                         initial={{ opacity: 0 }}
@@ -521,10 +509,11 @@ export default function App() {
                       />
                     )}
                   </AnimatePresence>
+                  {(isGenerating || !currentImage) && <SkeletonHero />}
                   {isGenerating && (
                     <div className="absolute inset-0 bg-black/40 backdrop-blur-sm flex flex-col items-center justify-center text-white gap-4 z-30">
                       <Loader2 className="w-12 h-12 animate-spin" />
-                      <p className="font-medium tracking-wide">Painting the scene...</p>
+                      <p className="ghibli-heading text-lg font-bold tracking-wide" style={{ fontSize: '1.1rem' }}>Painting the scene…</p>
                     </div>
                   )}
                   <ImageMusicPlayer
@@ -534,71 +523,205 @@ export default function App() {
                     isPlaying={isPlaying}
                     onTogglePlay={() => void toggleAtmospherePlayback()}
                     musicLabel={multiverseState.musicStyle}
+                    isLoading={isOrchestrating}
                   />
                 </div>
                 <div className="border-t border-black/5 px-4 py-3 bg-black/[0.04]">
                   <EnvironmentSoundPicker
                     selectedId={selectedEnvId}
                     onSelectId={handleEnvSelect}
-                    volume={envVolume}
-                    onVolumeChange={setEnvVolume}
+                    masterVolume={masterVolume}
+                    onMasterVolumeChange={setMasterVolume}
+                    mixRatio={mixRatio}
+                    onMixRatioChange={setMixRatio}
+                    disabled={isGenerating || isOrchestrating}
                   />
                 </div>
-                <div className="p-6">
-                  <h1 className="text-2xl font-bold mb-4 ghibli-heading">{currentImage?.prompt || 'Imagination Engine'}</h1>
-                  <div className="flex items-center gap-3 py-4 border-t border-black/5">
-                    <div className="w-10 h-10 rounded-full bg-[var(--accent-color)] flex items-center justify-center text-white shrink-0">
-                      <Sparkles className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <p className="font-bold">Lo-Fi Vision</p>
-                      <p className="text-xs opacity-50 ghibli-display">{multiverseState.tone}</p>
-                    </div>
-                  </div>
+                <div className="px-6 pt-6 pb-5">
+                  {/* Scene title — skeleton while image loading, real title once image arrives */}
+                  {isGenerating || !currentImage ? (
+                    <SkeletonTitle />
+                  ) : (
+                    <h1
+                      className="ghibli-heading leading-tight mb-3"
+                      style={{
+                        fontSize: 'clamp(1.6rem, 3.5vw, 2.75rem)',
+                        fontWeight: 900,
+                        letterSpacing: '-0.02em',
+                        color: 'var(--text-color)',
+                      }}
+                    >
+                      {currentImage.prompt}
+                    </h1>
+                  )}
+
+                  {/* Scene poem — skeleton until the ScenePoet/orchestrator resolves */}
+                  {isGenerating || !currentImage || isOrchestrating ? (
+                    <SkeletonTone />
+                  ) : (
+                    multiverseState.tone && (
+                      <p
+                        className="ghibli-display mb-5"
+                        style={{
+                          fontSize: 'clamp(1rem, 1.6vw, 1.2rem)',
+                          fontStyle: 'italic',
+                          opacity: 0.7,
+                          lineHeight: 1.75,
+                          color: 'var(--text-color)',
+                          maxWidth: '68ch',
+                        }}
+                      >
+                        {multiverseState.tone}
+                      </p>
+                    )
+                  )}
                 </div>
               </div>
 
               {/* Grid (Mobile friendly) */}
               <div className="lg:hidden">
-                <ThumbnailGrid items={history} onSelect={setCurrentImage} onDelete={deleteImage} />
+                <ThumbnailGrid items={history} onSelect={setCurrentImage} onDelete={deleteImage} isGenerating={isGenerating} />
               </div>
             </div>
 
-            {/* Desktop Recommendations */}
+            {/* Desktop History Sidebar */}
             <div className="hidden lg:block w-72 xl:w-80 shrink-0">
-              <h2 className="text-lg font-bold mb-4 flex items-center gap-2">
-                <History size={18} /> History
+              <h2
+                className="ghibli-heading mb-5 flex items-center gap-2"
+                style={{ fontSize: '1.3rem', fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text-color)' }}
+              >
+                <History size={16} className="opacity-60" /> History
               </h2>
-              <div className="space-y-4">
-                {history.map(img => (
-                  <div key={img.id} onClick={() => setCurrentImage(img)} className="flex gap-3 group cursor-pointer">
-                    <div className="w-32 aspect-video rounded-lg overflow-hidden shrink-0 bg-black/5 relative">
-                      <img src={img.url} className="w-full h-full object-cover group-hover:scale-105 transition-all" />
-                      <button onClick={(e) => deleteImage(img.id, e)} className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Trash2 size={12} />
-                      </button>
+              <div className="space-y-5">
+                {history.length === 0 ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <SkeletonSidebarItem key={i} />
+                  ))
+                ) : (
+                  history.map(img => (
+                    <div key={img.id} onClick={() => setCurrentImage(img)} className="flex gap-3 group cursor-pointer">
+                      <div className="w-32 aspect-video rounded-lg overflow-hidden shrink-0 bg-black/5 relative">
+                        <img src={img.url} className="w-full h-full object-cover group-hover:scale-105 transition-all" />
+                        <button onClick={(e) => deleteImage(img.id, e)} className="absolute top-1 right-1 p-1 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                      <div className="min-w-0 flex flex-col justify-center gap-1">
+                        <h3
+                          className="font-bold leading-snug line-clamp-2"
+                          style={{ fontSize: '0.8rem', color: 'var(--text-color)' }}
+                        >
+                          {img.prompt}
+                        </h3>
+                        <p className="text-[10px] opacity-35 ghibli-display">Lo-Fi Vision</p>
+                      </div>
                     </div>
-                    <div className="min-w-0">
-                      <h3 className="text-sm font-bold truncate">{img.prompt}</h3>
-                      <p className="text-[10px] opacity-40 mt-1 ghibli-display">Lo-Fi Vision</p>
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>
         </main>
-          </div>
+            </div>
 
-        {/* Agent Log — fixed chrome, outside themed wrapper */}
-        <AgentLog logs={logs} isOpen={isLogOpen} />
+            {/* Agent Log — fixed chrome, outside themed wrapper */}
+            <AgentLog logs={logs} isOpen={isLogOpen} />
+          </div>
+          <AgentActivityRail logs={logs} onRetry={handleRetryAgent} since={generationEpoch} />
+        </div>
       </div>
-    </div>
-  </div>
+    </motion.div>
 );
 }
 
-function ThumbnailGrid({ items, onSelect, onDelete }: any) {
+interface LandingScreenProps {
+  prompt: string;
+  onPromptChange: (v: string) => void;
+  onSubmit: (e: FormEvent) => void;
+  isGenerating: boolean;
+}
+
+function LandingScreen({ prompt, onPromptChange, onSubmit, isGenerating }: LandingScreenProps) {
+  return (
+    <div className="fixed inset-0 bg-white flex flex-col items-center justify-center px-6">
+      <style dangerouslySetInnerHTML={{ __html: `
+        :root {
+          --bg-color: #ffffff;
+          --text-color: #0f0f0f;
+          --accent-color: #0f0f0f;
+          --font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+          --bg-grain-opacity: 0;
+          --bg-tint: none;
+          --bg-vignette: none;
+          --backdrop-opacity: 0;
+        }
+        body { background-color: #ffffff; }
+      `}} />
+      {/* Wordmark */}
+      <div className="flex items-center gap-3 mb-12 select-none">
+        <div className="flex items-center justify-center w-14 h-14 rounded-full bg-[#0f0f0f] shrink-0">
+          <Headphones className="w-7 h-7 text-white" strokeWidth={1.75} />
+        </div>
+        <span className="text-4xl font-black tracking-tight text-[#0f0f0f]" style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif' }}>
+          Lo-Fi Vision
+        </span>
+      </div>
+
+      {/* Tagline */}
+      <p className="text-[#606060] text-lg mb-10 text-center max-w-md">
+        Describe a scene and step into a living, breathing world.
+      </p>
+
+      {/* Big form */}
+      <form onSubmit={onSubmit} className="w-full max-w-2xl flex flex-col items-center gap-4">
+        <div className="relative w-full">
+          <input
+            type="text"
+            value={prompt}
+            onChange={(e) => onPromptChange(e.target.value)}
+            placeholder="Describe a scene to shift realities…"
+            autoFocus
+            className="w-full h-16 pl-6 pr-14 rounded-full border-2 text-xl outline-none transition-shadow placeholder:text-[#aaaaaa] focus:border-[#065fd4] focus:ring-4 focus:ring-[#065fd4]/20"
+            style={{
+              backgroundColor: '#f8f8f8',
+              borderColor: '#e5e5e5',
+              color: '#0f0f0f',
+            }}
+            disabled={isGenerating}
+          />
+          <div className="absolute right-5 top-1/2 -translate-y-1/2 text-[#aaaaaa]">
+            <Search className="w-6 h-6" />
+          </div>
+        </div>
+
+        <button
+          type="submit"
+          disabled={!prompt.trim() || isGenerating}
+          className="h-14 flex items-center justify-center gap-3 rounded-full px-10 text-base font-bold text-white transition-all hover:opacity-90 disabled:opacity-40 disabled:pointer-events-none"
+          style={{ backgroundColor: '#0f0f0f' }}
+        >
+          {isGenerating ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <Sparkles className="w-5 h-5" />
+          )}
+          Generate
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function ThumbnailGrid({ items, onSelect, onDelete, isGenerating }: any) {
+  if (items.length === 0) {
+    return (
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <SkeletonGridItem key={i} />
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
       {items.map((img: any) => (
@@ -609,7 +732,7 @@ function ThumbnailGrid({ items, onSelect, onDelete }: any) {
               <Trash2 size={14} />
             </button>
           </div>
-          <h3 className="mt-2 font-bold text-sm truncate">{img.prompt}</h3>
+          <h3 className="mt-2 font-bold leading-snug line-clamp-2 ghibli-heading" style={{ fontSize: '0.9rem' }}>{img.prompt}</h3>
         </div>
       ))}
     </div>

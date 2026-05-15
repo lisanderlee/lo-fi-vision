@@ -3,6 +3,7 @@
  */
 
 import type { ThemePaletteHex } from "./types";
+import { ALL_FONT_FAMILIES } from "./services/googleFonts";
 
 const MIN_RATIO_BODY = 4.5;
 const MIN_RATIO_UI = 3.1;
@@ -21,6 +22,7 @@ const DEFAULTS: Record<string, string> = {
   "--font-family": "'Inter', ui-sans-serif, system-ui, sans-serif",
   "--display-font": "'Libre Baskerville', serif",
   "--heading-font": "'Playfair Display', serif",
+  "--label-font": "'JetBrains Mono', ui-monospace, SFMono-Regular, monospace",
 };
 
 const ORDER = [
@@ -37,35 +39,29 @@ const ORDER = [
   "--font-family",
   "--display-font",
   "--heading-font",
+  "--label-font",
 ];
 
-/** Exact stacks the app loads via Google Fonts; anything else falls back to DEFAULTS. */
+// Build font stacks for every family in the curated catalog.
+// The sanitizer accepts any family name from the catalog paired with a
+// CSS-safe fallback, so v2 themeDesigner picks (e.g. Space Grotesk,
+// Bebas Neue, JetBrains Mono) aren't downgraded back to Inter.
+function buildFontStackSet(fallback: string): Set<string> {
+  const s = new Set<string>();
+  for (const family of ALL_FONT_FAMILIES) {
+    s.add(`'${family}', ${fallback}`);
+    // Also accept without trailing fallback so model output matches loosely.
+    s.add(`'${family}'`);
+  }
+  return s;
+}
+
+/** Font stacks accepted by the sanitizer — keyed by CSS variable name. */
 const FONT_STACK_ALLOWLIST: Record<string, Set<string>> = {
-  "--font-family": new Set([
-    "'Inter', ui-sans-serif, system-ui, sans-serif",
-    "'DM Sans', ui-sans-serif, system-ui, sans-serif",
-    "'Nunito', ui-sans-serif, system-ui, sans-serif",
-    "'Manrope', ui-sans-serif, system-ui, sans-serif",
-    "'Source Sans 3', ui-sans-serif, system-ui, sans-serif",
-  ]),
-  "--heading-font": new Set([
-    "'Playfair Display', serif",
-    "'Libre Baskerville', serif",
-    "'Fraunces', serif",
-    "'Cormorant Garamond', serif",
-    "'Spectral', serif",
-    "'Lora', serif",
-    "'Crimson Pro', serif",
-  ]),
-  "--display-font": new Set([
-    "'Libre Baskerville', serif",
-    "'Cormorant Garamond', serif",
-    "'Spectral', serif",
-    "'Lora', serif",
-    "'Playfair Display', serif",
-    "'Fraunces', serif",
-    "'Crimson Pro', serif",
-  ]),
+  "--font-family": buildFontStackSet("ui-sans-serif, system-ui, sans-serif"),
+  "--heading-font": buildFontStackSet("ui-serif, Georgia, serif"),
+  "--display-font": buildFontStackSet("ui-serif, Georgia, serif"),
+  "--label-font": buildFontStackSet("ui-monospace, SFMono-Regular, monospace"),
 };
 
 function canonicalizeFontStack(s: string): string {
@@ -88,7 +84,7 @@ function primaryFamilyKey(stack: string): string | null {
   return unquoted || null;
 }
 
-function pickFromAllowlist(raw: string, key: "--font-family" | "--heading-font" | "--display-font"): string {
+function pickFromAllowlist(raw: string, key: "--font-family" | "--heading-font" | "--display-font" | "--label-font"): string {
   const allow = FONT_STACK_ALLOWLIST[key];
   const n = canonicalizeFontStack(raw);
   if (allow.has(n)) return n;
@@ -109,7 +105,7 @@ function pickFromAllowlist(raw: string, key: "--font-family" | "--heading-font" 
 }
 
 function sanitizeFontStacks(map: Map<string, string>) {
-  for (const key of ["--font-family", "--heading-font", "--display-font"] as const) {
+  for (const key of ["--font-family", "--heading-font", "--display-font", "--label-font"] as const) {
     const raw = map.get(key);
     if (!raw?.trim()) {
       map.set(key, DEFAULTS[key]!);

@@ -4,10 +4,11 @@ export class Logger {
   private logs: LogEntry[] = [];
   private listeners: ((logs: LogEntry[]) => void)[] = [];
 
-  log(agent: string, headline: string, detail?: string, args?: any) {
+  log(agent: string, headline: string, detail?: string, args?: any, category?: string) {
     const entry: LogEntry = {
       id: Math.random().toString(36).substring(7),
       agent,
+      category,
       status: 'running',
       headline,
       detail,
@@ -47,3 +48,45 @@ export class Logger {
 }
 
 export const logger = new Logger();
+
+/** Append a single already-completed informational log entry. */
+export function logInfo(
+  category: string,
+  agent: string,
+  headline: string,
+  detail?: string,
+  args?: any,
+): void {
+  const id = logger.log(agent, headline, detail, args, category);
+  logger.update(id, { status: 'done' });
+}
+
+/**
+ * Run `fn`, bookending it with a running/done log entry.
+ * - `resultShaper` is called with the return value to produce the `result` field stored in the log
+ *   (strip large binary payloads here).
+ * - Re-throws on error after marking the entry `failed` so callers can `Promise.allSettled`.
+ */
+export async function timed<T>(
+  category: string,
+  agent: string,
+  args: any,
+  fn: () => Promise<T>,
+  resultShaper?: (value: T) => any,
+): Promise<T> {
+  const id = logger.log(agent, `${agent} running…`, undefined, args, category);
+  try {
+    const value = await fn();
+    logger.update(id, {
+      status: 'done',
+      result: resultShaper ? resultShaper(value) : value,
+    });
+    return value;
+  } catch (err) {
+    logger.update(id, {
+      status: 'failed',
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}

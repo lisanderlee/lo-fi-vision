@@ -19,10 +19,20 @@
   --font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --display-font: 'Libre Baskerville', serif;
   --heading-font: 'Playfair Display', serif;
+  --label-font: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
   --divider-color: rgba(45, 42, 38, 0.08);
 
   --card-border: 1px solid var(--divider-color);
   --card-shadow: 0 10px 30px -10px rgba(26, 77, 46, 0.1);
+
+  /* v2 backdrop layering tokens */
+  --backdrop-opacity: 0.6;
+  --bg-tint: none;
+  --bg-vignette: none;
+  --bg-grain-opacity: 0;
+  --text-shadow: none;
+  --card-backdrop-filter: none;
+  --card-rotation: 0deg;
 }
 
 body {
@@ -44,16 +54,28 @@ body {
   font-family: var(--display-font);
 }
 
+/** Small uppercase labels — monospace/terminal feel driven by --label-font */
+.ghibli-label {
+  font-family: var(--label-font);
+}
+
 .ghibli-card {
   background-color: var(--card-bg);
   border-radius: var(--ui-radius);
   border: var(--card-border);
   box-shadow: var(--card-shadow);
+  backdrop-filter: var(--card-backdrop-filter);
+  -webkit-backdrop-filter: var(--card-backdrop-filter);
+  transform: rotate(var(--card-rotation));
   transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
+.ghibli-heading {
+  text-shadow: var(--text-shadow);
+}
+
 .ghibli-card:hover {
-  transform: translateY(-2px);
+  transform: rotate(var(--card-rotation)) translateY(-2px);
   box-shadow: 0 15px 35px -10px rgba(26, 77, 46, 0.15);
 }
 
@@ -110,11 +132,37 @@ body {
   position: absolute;
   inset: 0;
   background-color: var(--bg-color);
-  opacity: 0.6;
+  opacity: var(--backdrop-opacity);
   z-index: 2;
   transition: background-color 2s ease, opacity 1.5s ease;
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
+}
+
+.bg-tint {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-tint);
+  z-index: 3;
+  pointer-events: none;
+  transition: background 2s ease;
+}
+
+.bg-vignette {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-vignette);
+  z-index: 4;
+  pointer-events: none;
+}
+
+.bg-grain {
+  position: absolute;
+  inset: 0;
+  background-image: url('https://www.transparenttextures.com/patterns/stardust.png');
+  opacity: var(--bg-grain-opacity);
+  z-index: 5;
+  pointer-events: none;
 }
 
 .motion-flicker {
@@ -191,6 +239,22 @@ body {
 .custom-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(0, 0, 0, 0.05) 25%,
+    rgba(0, 0, 0, 0.10) 50%,
+    rgba(0, 0, 0, 0.05) 75%
+  );
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 3s ease-in-out infinite;
 }
 
 .image-player {

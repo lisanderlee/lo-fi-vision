@@ -8,137 +8,67 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function readMediaDurationSeconds(a: HTMLAudioElement): number {
+function readDuration(a: HTMLAudioElement): number {
   const d = a.duration;
-  if (Number.isFinite(d) && d > 0 && d !== Number.POSITIVE_INFINITY) {
-    return d;
-  }
+  if (Number.isFinite(d) && d > 0 && d !== Infinity) return d;
   try {
     if (a.seekable?.length) {
-      const end = a.seekable.end(a.seekable.length - 1);
-      if (Number.isFinite(end) && end > 0) return end;
+      const e = a.seekable.end(a.seekable.length - 1);
+      if (Number.isFinite(e) && e > 0) return e;
     }
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
   return 0;
 }
 
-function readSeekableEnd(a: HTMLAudioElement): number {
-  try {
-    if (a.seekable?.length) {
-      const end = a.seekable.end(a.seekable.length - 1);
-      if (Number.isFinite(end) && end > 0) return end;
-    }
-  } catch {
-    /* ignore */
-  }
-  return 0;
-}
+const FALLBACK_SECS = 30;
 
-/** Lyria prompt targets ~30s; used until real duration metadata is available. */
-const FALLBACK_TRACK_SECONDS = 30;
-
-type ImageMusicPlayerProps = {
+type Props = {
   audioRef: React.RefObject<HTMLAudioElement | null>;
   audioUrl: string | undefined;
-  /** True when Lyria URL or an ambience clip is selected — main play applies to both. */
   hasPlayableSource: boolean;
   isPlaying: boolean;
   onTogglePlay: () => void;
   musicLabel?: string;
+  isLoading?: boolean;
 };
 
-export function ImageMusicPlayer({
-  audioRef,
-  audioUrl,
-  hasPlayableSource,
-  isPlaying,
-  onTogglePlay,
-  musicLabel,
-}: ImageMusicPlayerProps) {
+export function ImageMusicPlayer({ audioRef, audioUrl, hasPlayableSource, isPlaying, onTogglePlay, musicLabel, isLoading = false }: Props) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const syncFromAudio = useCallback(() => {
+  const sync = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
     setCurrentTime(a.currentTime);
-    const d = readMediaDurationSeconds(a);
-    if (d > 0) setDuration(d);
+    const d = readDuration(a);
+    if (d > 0) setDuration(prev => Math.max(prev, d));
   }, [audioRef]);
 
   useEffect(() => {
     const a = audioRef.current;
     if (!a) return;
-
-    const refresh = () => {
-      setCurrentTime(a.currentTime);
-      const d = readMediaDurationSeconds(a);
-      if (d > 0) setDuration((prev) => (d > prev ? d : prev));
-    };
-
-    const onMeta = () => {
-      const d = readMediaDurationSeconds(a);
-      if (d > 0) setDuration(d);
-    };
-
-    refresh();
-    onMeta();
-
-    a.addEventListener('timeupdate', refresh);
-    a.addEventListener('loadedmetadata', onMeta);
-    a.addEventListener('loadeddata', onMeta);
-    a.addEventListener('durationchange', onMeta);
-    a.addEventListener('progress', onMeta);
-    a.addEventListener('canplay', onMeta);
-    a.addEventListener('seeked', syncFromAudio);
-
-    return () => {
-      a.removeEventListener('timeupdate', refresh);
-      a.removeEventListener('loadedmetadata', onMeta);
-      a.removeEventListener('loadeddata', onMeta);
-      a.removeEventListener('durationchange', onMeta);
-      a.removeEventListener('progress', onMeta);
-      a.removeEventListener('canplay', onMeta);
-      a.removeEventListener('seeked', syncFromAudio);
-    };
-  }, [audioRef, audioUrl, syncFromAudio]);
+    sync();
+    const events = ['timeupdate', 'loadedmetadata', 'loadeddata', 'durationchange', 'progress', 'canplay', 'seeked'];
+    events.forEach(ev => a.addEventListener(ev, sync));
+    return () => events.forEach(ev => a.removeEventListener(ev, sync));
+  }, [audioRef, audioUrl, sync]);
 
   useEffect(() => {
     if (!isPlaying) return;
     let raf = 0;
-    const tick = () => {
-      const a = audioRef.current;
-      if (a) {
-        setCurrentTime(a.currentTime);
-        const d = readMediaDurationSeconds(a);
-        if (d > 0) setDuration((prev) => Math.max(prev, d));
-      }
-      raf = requestAnimationFrame(tick);
-    };
+    const tick = () => { sync(); raf = requestAnimationFrame(tick); };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [isPlaying, audioRef]);
+  }, [isPlaying, sync]);
 
-  useEffect(() => {
-    if (!audioUrl) {
-      setCurrentTime(0);
-      setDuration(0);
-    }
-  }, [audioUrl]);
+  useEffect(() => { if (!audioUrl) { setCurrentTime(0); setDuration(0); } }, [audioUrl]);
 
   const hasTrack = Boolean(audioUrl);
-  const a = audioRef.current;
-  const seekableEnd = a && hasTrack ? readSeekableEnd(a) : 0;
-  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
-  const knownEnd = Math.max(safeDuration, seekableEnd);
-  const endForUi =
-    knownEnd > 0 ? knownEnd : hasTrack ? FALLBACK_TRACK_SECONDS : 0;
-  const rangeMax = hasTrack ? Math.max(0.1, knownEnd, currentTime, endForUi) : 1;
-  const rangeValue = hasTrack ? Math.min(currentTime, rangeMax) : 0;
-  const canScrub = hasTrack;
-  const durationLabel = hasTrack && endForUi > 0 ? formatTime(knownEnd > 0 ? knownEnd : endForUi) : '—:—';
+  const safeDur = Number.isFinite(duration) && duration > 0 ? duration : 0;
+  const endForUi = safeDur > 0 ? safeDur : (hasTrack ? FALLBACK_SECS : 0);
+  const rangeMax = hasTrack ? Math.max(0.1, safeDur, currentTime, endForUi) : 1;
+  const rangeVal = hasTrack ? Math.min(currentTime, rangeMax) : 0;
+  const durLabel = hasTrack && endForUi > 0 ? formatTime(safeDur > 0 ? safeDur : endForUi) : '—:—';
 
   return (
     <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-auto">
@@ -154,23 +84,24 @@ export function ImageMusicPlayer({
           <button
             type="button"
             onClick={onTogglePlay}
-            disabled={!hasPlayableSource}
-            className="shrink-0 w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white text-black flex items-center justify-center hover:bg-white/90 disabled:opacity-40 disabled:pointer-events-none transition-colors"
+            disabled={!hasPlayableSource || isLoading}
+            className="shrink-0 w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-white text-black flex items-center justify-center hover:bg-white/90 disabled:opacity-40 disabled:pointer-events-none transition-all duration-300"
             aria-label={isPlaying ? 'Pause audio' : 'Play audio'}
           >
-            {isPlaying ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+            {isLoading
+              ? <Music className="w-5 h-5 opacity-60 animate-pulse" />
+              : isPlaying
+                ? <Pause className="w-5 h-5 fill-current" />
+                : <Play className="w-5 h-5 fill-current ml-0.5" />}
           </button>
 
-          <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+          <div className={`flex-1 min-w-0 flex flex-col gap-1.5 transition-opacity duration-300 ${isLoading ? 'opacity-40' : ''}`}>
             <input
               type="range"
-              min={0}
-              max={rangeMax}
-              step={0.05}
-              value={rangeValue}
-              disabled={!canScrub}
+              min={0} max={rangeMax} step={0.05} value={rangeVal}
+              disabled={!hasTrack || isLoading}
               aria-label="Atmosphere progress"
-              onChange={(e) => {
+              onChange={e => {
                 const t = parseFloat(e.target.value);
                 const el = audioRef.current;
                 if (!el || !Number.isFinite(t)) return;
@@ -181,7 +112,7 @@ export function ImageMusicPlayer({
             />
             <div className="flex justify-between text-[10px] sm:text-xs tabular-nums text-white/75">
               <span>{formatTime(currentTime)}</span>
-              <span>{durationLabel}</span>
+              <span>{durLabel}</span>
             </div>
           </div>
         </div>

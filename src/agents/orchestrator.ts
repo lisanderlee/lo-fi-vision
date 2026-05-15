@@ -1,151 +1,232 @@
-import { GoogleGenAI } from "@google/genai";
 import { logger } from "./logger";
-import { MultiverseState } from "./types";
-import { generateNewMusic } from "./music";
+import { withTimeout } from "./gemini";
 import { processMultiverseThemeCss } from "./themeContrast";
+import { loadGoogleFonts } from "./services/googleFonts";
+import { generateNewMusic } from "./music";
+import { designTheme } from "./subagents/themeDesigner";
+import { generateArtwork } from "./subagents/artDirector";
+import { composeAudio } from "./subagents/composer";
+import { writeAnnouncement } from "./subagents/weatherPoet";
+import { critique } from "./subagents/critic";
+import type {
+  AestheticBrief,
+  ArtworkSpec,
+  ThemeSpec,
+  Announcement,
+  AudioSpec,
+  Critique,
+  MultiverseState,
+  ToolName,
+} from "./types";
 
-export async function orchestrateMultiverse(prompt: string, currentState: MultiverseState): Promise<MultiverseState> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY is not defined in environment');
-  const ai = new GoogleGenAI({ apiKey });
-  
-  const logId = logger.log("Orchestrator", "Analyzing multiverse shift...", prompt);
-  
-  try {
-    const stateForPrompt: Partial<MultiverseState> = { ...currentState };
-    delete (stateForPrompt as any).backgroundImage;
-    delete (stateForPrompt as any).audioUrl;
-    delete (stateForPrompt as any).cssVariables;
+interface ShiftBundle {
+  theme: ThemeSpec;
+  artwork: ArtworkSpec;
+  audio: AudioSpec;
+  announcement: Announcement;
+}
 
-    const systemPrompt = `
-You are a senior product UI designer and color-systems expert (Lyria Multiverse Orchestrator).
-Translate the user's aesthetic into a complete **content-area** theme for "Lo-Fi Vision" (YouTube-like layout). Do not try to theme the global top bar or side intelligence panel—only the tokens below affect sidebar + main content.
+async function reviseOnce(
+  brief: AestheticBrief,
+  bundle: ShiftBundle,
+  verdict: Critique,
+): Promise<ShiftBundle> {
+  const notes = verdict.notes;
+  const next = { ...bundle };
 
-You are **not** given the previous CSS variable string—each shift must produce a **fresh** palette and typography pairing from the user prompt and contrastCheck (do not assume fonts or colors stayed the same as last time).
-
-Return a single JSON object with:
-- cssVariables: A string of semicolon-terminated CSS custom properties for :root. MUST include every key below with valid values:
-  --bg-color, --text-color, --card-bg, --accent-color, --accent-color-2, --btn-bg, --btn-text,
-  --ui-radius (e.g. "12px"), --card-shadow (full box-shadow), --divider-color (rgba or hex for hairlines),
-  --font-family, --display-font, --heading-font (see Typography section; use EXACT stack strings).
-- theme (optional but recommended): an object with the same colors as hex/strings for repair:
-  { "bg", "text", "cardBg", "accent", "accent2", "btnBg", "btnText", "uiRadius", "cardShadow", "dividerColor" }
-  Keys map to the CSS names above. Hex must include #.
-
-Typography (required — pick ONE full line for each variable; copy exactly, quotes included):
-
---font-family (UI / body):
-  * 'Inter', ui-sans-serif, system-ui, sans-serif
-  * 'DM Sans', ui-sans-serif, system-ui, sans-serif
-  * 'Nunito', ui-sans-serif, system-ui, sans-serif
-  * 'Manrope', ui-sans-serif, system-ui, sans-serif
-  * 'Source Sans 3', ui-sans-serif, system-ui, sans-serif
-
---heading-font (titles, .ghibli-heading — choose a mood fit; pair with UI font):
-  * 'Playfair Display', serif
-  * 'Libre Baskerville', serif
-  * 'Fraunces', serif
-  * 'Cormorant Garamond', serif
-  * 'Spectral', serif
-  * 'Lora', serif
-  * 'Crimson Pro', serif
-
---display-font (secondary / poetic labels — often a refined serif; may match heading-font):
-  * 'Libre Baskerville', serif
-  * 'Cormorant Garamond', serif
-  * 'Spectral', serif
-  * 'Lora', serif
-  * (or same stack as --heading-font when appropriate)
-
-Never invent font names outside this list. Prefer pairings that match the Ghibli-world mood.
-
-Also include:
-- motionPreset: one of ["none", "scanlines", "flicker", "drift", "rain", "ember", "dust"]
-- tone: short poetic mood line
-- musicStyle: soundtrack description for Lyria
-- backgroundPrompt: detailed 16:9 Ghibli background art prompt
-- contrastCheck: "light" or "dark" — expected brightness of that background art
-
-Designer rules (non-negotiable):
-1. contrastCheck === "light" → --text-color must read clearly on warm OR cool tinted backgrounds — use muted ink, deep plum-teal, forest, burnt umber, or blue-gray as fits the scene (not only brown). --card-bg should read as a distinct surface vs --bg-color.
-2. contrastCheck === "dark" → --text-color can be moonlit ivory, pale sage, soft peach, or misty blue-white; --card-bg solid or high-opacity surfaces (#151822, #1a2332, rgba) so text never floats on glass alone.
-3. Body text must stay readable (~4.5:1 vs --bg-color and vs --card-bg after any automation). Never put --text-color and --bg-color both at ~white or both at ~black.
-4. --btn-text vs --btn-bg must be a bold, readable button pair.
-5. **Color creativity:** vary hue families across worlds — twilight indigo + copper, dawn coral + slate, moss + ochre, sakura pink + charcoal, storm teal + sand, etc. Accents (--accent-color, --accent-color-2) should feel clearly different from each other and from the background.
-6. Ghibli essence is mood and hand-crafted warmth, not "always beige + forest green" — borrow palette variety from Spirited Away markets, Mononoke forests, Ponyo seas, Howl's skies, etc.
-
-Before returning JSON, mentally verify: text on bg OK, text on card OK, button pair OK, accents distinct.
-
-Current State (abstract): ${JSON.stringify(stateForPrompt)}
-User Prompt: "${prompt}"
-    `;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: [{ role: 'user', parts: [{ text: systemPrompt }] }]
-    });
-    
-    let text = "";
-    try {
-      text = response.text;
-    } catch (e) {
-      if (response.candidates && response.candidates[0].content.parts[0].text) {
-        text = response.candidates[0].content.parts[0].text;
-      }
-    }
-    
-    if (!text) throw new Error("No text returned from Gemini");
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON found in response: " + text);
-    
-    let newState = JSON.parse(jsonMatch[0]);
-
-    const repairedCss = processMultiverseThemeCss({
-      cssVariables: typeof newState.cssVariables === "string" ? newState.cssVariables : "",
-      theme: newState.theme,
-    });
-    newState.cssVariables = repairedCss;
-    delete newState.theme;
-
-    // Handle Background Generation
-    if (newState.backgroundPrompt) {
-      const bgImageId = logger.log("Artist Agent", "Painting background atmosphere...", newState.backgroundPrompt);
+  await Promise.allSettled(
+    verdict.revise.map(async (tool: ToolName) => {
       try {
-        const bgResult = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-image',
-          contents: [{ parts: [{ text: newState.backgroundPrompt + ", Studio Ghibli style, ultra wide, cinematic background, soft focus" }] }],
-          config: { imageConfig: { aspectRatio: "16:9" } },
-        });
-
-        const bgCandidates = bgResult.candidates;
-        if (bgCandidates && bgCandidates.length > 0) {
-          for (const part of bgCandidates[0].content.parts) {
-            if (part.inlineData) {
-              newState.backgroundImage = `data:image/png;base64,${part.inlineData.data}`;
-              break;
-            }
-          }
+        if (tool === "design_theme") {
+          next.theme = await designTheme(brief, { mood: brief.prompt, revisionNotes: notes });
+        } else if (tool === "generate_artwork") {
+          next.artwork = await generateArtwork(brief, {
+            scene: brief.prompt,
+            style: "Studio Ghibli watercolor",
+            revisionNotes: notes,
+          });
+        } else if (tool === "compose_audio") {
+          next.audio = await composeAudio(brief, { mood: brief.prompt, revisionNotes: notes });
+        } else if (tool === "write_announcement") {
+          next.announcement = await writeAnnouncement(brief, {
+            voice: "in-universe narrator",
+            tone: brief.prompt,
+            revisionNotes: notes,
+          });
         }
-        if (!newState.backgroundImage) throw new Error("Artist returned no image data.");
-        logger.update(bgImageId, { status: "done" });
-      } catch (e) {
-        logger.update(bgImageId, { status: "failed", detail: "Artist was unavailable: " + String(e) });
+      } catch (err) {
+        // Revision failure is non-fatal — ship the original artifact.
+        logger.log(
+          "Director",
+          `Revision of ${tool} failed, keeping original`,
+          err instanceof Error ? err.message : String(err),
+        );
       }
-    }
-    
-    // Trigger music agent
-    if (newState.musicStyle) {
-      const musicResult = await generateNewMusic(newState.musicStyle);
-      if (musicResult?.audioUrl) {
-        newState.audioUrl = musicResult.audioUrl;
-      }
+    }),
+  );
+
+  return next;
+}
+
+/**
+ * Retry a single named agent and return the slice of MultiverseState it
+ * controls. Critic and System are not retryable (return null).
+ * Director re-runs the full pipeline.
+ */
+export async function retryAgent(
+  agentName: string,
+  prompt: string,
+  currentState: MultiverseState,
+): Promise<Partial<MultiverseState> | null> {
+  const brief: AestheticBrief = { prompt };
+
+  switch (agentName) {
+    case 'ThemeDesigner': {
+      const theme = await designTheme(brief, { mood: prompt });
+      const cssVariables = processMultiverseThemeCss({ cssVariables: theme.cssVariables });
+      if (theme.googleFonts) loadGoogleFonts(theme.googleFonts);
+      return {
+        cssVariables,
+        motionPreset:         theme.motionPreset,
+        weatherIconAnimation: theme.weatherIconAnimation,
+        textRevealStyle:      theme.textRevealStyle,
+      };
     }
 
-    logger.update(logId, { status: "done", result: newState });
-    return { ...currentState, ...newState };
-  } catch (err) {
-    logger.update(logId, { status: "failed", detail: err instanceof Error ? err.message : String(err) });
-    throw err;
+    case 'ArtDirector': {
+      const artwork = await generateArtwork(brief, { scene: prompt, style: 'Studio Ghibli watercolor' });
+      return { backgroundImage: artwork.imageUrl };
+    }
+
+    case 'Composer': {
+      const audio      = await composeAudio(brief, { mood: prompt });
+      const musicStyle = audio.vibe ?? prompt;
+      const music      = await generateNewMusic(musicStyle);
+      return { musicStyle, audioUrl: music?.audioUrl ?? currentState.audioUrl };
+    }
+
+    case 'ScenePoet': {
+      const announcement = await writeAnnouncement(brief, { voice: 'in-universe narrator', tone: prompt });
+      return { tone: announcement.text };
+    }
+
+    case 'Director': {
+      return await orchestrateMultiverse(prompt, currentState);
+    }
+
+    default:
+      return null;
   }
 }
 
+export async function orchestrateMultiverse(
+  prompt: string,
+  currentState: MultiverseState,
+): Promise<MultiverseState> {
+  const brief: AestheticBrief = { prompt };
+  const orchestratorId = logger.log("Director", "Orchestrating scene shift…", prompt);
+
+  try {
+    // Stage 1: run all four specialists in parallel.
+    // Timeouts are tuned per agent type: LLM agents settle in ~5s so 25s is
+    // ample; image generation typically takes 10–20s so 35s gives headroom.
+    const LLM_TIMEOUT_MS   = 25_000;
+    const IMAGE_TIMEOUT_MS = 35_000;
+
+    const results = await Promise.allSettled([
+      withTimeout(LLM_TIMEOUT_MS,   designTheme(brief, { mood: prompt })),
+      withTimeout(IMAGE_TIMEOUT_MS, generateArtwork(brief, { scene: prompt, style: "Studio Ghibli watercolor" })),
+      withTimeout(LLM_TIMEOUT_MS,   composeAudio(brief, { mood: prompt })),
+      withTimeout(LLM_TIMEOUT_MS,   writeAnnouncement(brief, { voice: "in-universe narrator", tone: prompt })),
+    ]);
+
+    // Extract settled values — each is independent; a failure in one never
+    // blocks the others from being applied.
+    const theme        = results[0].status === "fulfilled" ? results[0].value : null;
+    const artwork      = results[1].status === "fulfilled" ? results[1].value : null;
+    const audio        = results[2].status === "fulfilled" ? results[2].value : null;
+    const announcement = results[3].status === "fulfilled" ? results[3].value : null;
+
+    // Kick off Lyria immediately — it only needs the vibe string from
+    // composeAudio (or the raw prompt as fallback). Running it in parallel
+    // with the critique + revision cycle removes the entire Lyria round-trip
+    // (~10–20s) from the critical path.
+    const musicStyle  = audio?.vibe ?? prompt;
+    const musicPromise = generateNewMusic(musicStyle, audio?.musicBrief);
+
+    // Stage 2: critic — runs when at least 3 of 4 artifacts are available.
+    // Missing artifacts are passed as undefined; the critic treats all four as optional.
+    let finalTheme        = theme;
+    let finalArtwork      = artwork;
+    let finalAudio        = audio;
+    let finalAnnouncement = announcement;
+
+    const artifactCount = [theme, artwork, audio, announcement].filter(Boolean).length;
+    if (artifactCount >= 3) {
+      // Provide whatever succeeded; the critic accepts all four as optional.
+      const fullBundle: ShiftBundle = {
+        theme:        theme        ?? { cssVariables: '', rationale: '', motionPreset: 'none', weatherIconAnimation: 'none', textRevealStyle: 'crossfade', googleFonts: [] },
+        artwork:      artwork      ?? { imageUrl: '', imagePrompt: '', imageBase64: '', imageMimeType: '' },
+        audio:        audio        ?? { vibe: prompt },
+        announcement: announcement ?? { text: '', voice: '' },
+      };
+      let verdict: Critique | null = null;
+      try {
+        verdict = await withTimeout(20_000, critique({
+          brief,
+          theme:        theme        ?? undefined,
+          artwork:      artwork      ?? undefined,
+          announcement: announcement ?? undefined,
+          audio:        audio        ?? undefined,
+        }));
+      } catch {
+        // Critic failure or timeout is non-fatal — skip the revise cycle.
+      }
+
+      // Stage 3: at most one revise cycle.
+      // Only propagate revised values for artifacts that originally succeeded
+      // (or that reviseOnce actually regenerated). A null artifact that wasn't
+      // revised must stay null so Stage 4 falls back to currentState correctly.
+      if (verdict && verdict.verdict === "revise" && verdict.revise.length > 0) {
+        const revised = await reviseOnce(brief, fullBundle, verdict);
+        if (theme        !== null || verdict.revise.includes('design_theme'))    finalTheme        = revised.theme;
+        if (artwork      !== null || verdict.revise.includes('generate_artwork')) finalArtwork      = revised.artwork;
+        if (audio        !== null || verdict.revise.includes('compose_audio'))    finalAudio        = revised.audio;
+        if (announcement !== null || verdict.revise.includes('write_announcement')) finalAnnouncement = revised.announcement;
+      }
+    }
+
+    // Stage 4: CSS processing is synchronous (fast); await the Lyria clip
+    // that has been generating in parallel with the critique + revision cycle.
+    if (finalTheme?.googleFonts) {
+      loadGoogleFonts(finalTheme.googleFonts);
+    }
+
+    const cssVariables = finalTheme
+      ? processMultiverseThemeCss({ cssVariables: finalTheme.cssVariables })
+      : currentState.cssVariables;
+
+    const musicResult = await musicPromise;
+
+    logger.update(orchestratorId, { status: "done" });
+
+    return {
+      ...currentState,
+      cssVariables,
+      motionPreset:         finalTheme?.motionPreset         ?? currentState.motionPreset,
+      weatherIconAnimation: finalTheme?.weatherIconAnimation ?? currentState.weatherIconAnimation,
+      textRevealStyle:      finalTheme?.textRevealStyle      ?? currentState.textRevealStyle,
+      tone:                 finalAnnouncement?.text          ?? currentState.tone,
+      backgroundImage:      finalArtwork?.imageUrl           ?? currentState.backgroundImage,
+      musicStyle,
+      musicBrief:           finalAudio?.musicBrief           ?? currentState.musicBrief,
+      audioUrl:             musicResult?.audioUrl            ?? currentState.audioUrl,
+    };
+  } catch (err) {
+    logger.update(orchestratorId, {
+      status: "failed",
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
